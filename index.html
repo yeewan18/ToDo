@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>To-Do</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #ffffff; --fg: #111111; --muted: #666666; --faint: #aaaaaa; --done: #888888;
+    --border: #dddddd; --control-border: #767676; --control-bg: #f0f0f0; --input-bg: #ffffff;
+    --hover: #eeeeee; --heading: #444444; --overdue: #cc0000;
+    --alert-bg: #fff3cd; --alert-border: #e0c36a;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1c1c1e; --fg: #f2f2f2; --muted: #a0a0a5; --faint: #6e6e73; --done: #8e8e93;
+    --border: #3a3a3c; --control-border: #636366; --control-bg: #2c2c2e; --input-bg: #2c2c2e;
+    --hover: #3a3a3c; --heading: #c7c7cc; --overdue: #ff6b6b;
+    --alert-bg: #4a3f12; --alert-border: #8a7425;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      color-scheme: dark;
+      --bg: #1c1c1e; --fg: #f2f2f2; --muted: #a0a0a5; --faint: #6e6e73; --done: #8e8e93;
+      --border: #3a3a3c; --control-border: #636366; --control-bg: #2c2c2e; --input-bg: #2c2c2e;
+      --hover: #3a3a3c; --heading: #c7c7cc; --overdue: #ff6b6b;
+      --alert-bg: #4a3f12; --alert-border: #8a7425;
+    }
+  }
+
+  body { font-family: sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; background: var(--bg); color: var(--fg); }
+  .topbar { text-align: right; font-size: 13px; color: var(--muted); }
+  h1 { text-align: center; margin-top: 8px; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; }
+  input[type=text], input[type=date], input[type=datetime-local], select {
+    padding: 8px; font-size: 16px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--control-border); border-radius: 3px;
+  }
+  label.field { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 2px; }
+  #input { flex: 1 1 100%; }
+  form button[type=submit] { align-self: flex-end; }
+  button { padding: 8px 12px; font-size: 14px; cursor: pointer; background: var(--control-bg); color: var(--fg); border: 1px solid var(--control-border); border-radius: 3px; }
+  button.icon { padding: 6px 8px; font-size: 16px; background: none; border: 1px solid transparent; border-radius: 4px; }
+  button.icon:hover { background: var(--hover); border-color: var(--control-border); }
+  #alerts .alert { display: flex; align-items: center; gap: 8px; background: var(--alert-bg); border: 1px solid var(--alert-border); padding: 8px 12px; margin-top: 12px; border-radius: 4px; }
+  #alerts .alert span { flex: 1; }
+  h2 { font-size: 16px; margin: 24px 0 0; color: var(--heading); }
+  ul { list-style: none; padding: 0; margin: 4px 0 0; }
+  li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  li .text { flex: 1; min-width: 120px; }
+  li .meta { font-size: 13px; color: var(--muted); }
+  li .meta.overdue { color: var(--overdue); font-weight: bold; }
+  li .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; color: #fff; }
+  .badge.High { background: #d33; }
+  .badge.Medium { background: #e08a00; }
+  .badge.Low { background: #4c9a6a; }
+  li.done .text { text-decoration: line-through; color: var(--done); }
+  li.done .meta { color: var(--faint); font-weight: normal; }
+  li.done .badge { opacity: .5; }
+  li .edit-text { flex: 1 1 100%; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <button type="button" id="theme" class="icon"></button>
+  </div>
+  <h1>To-Do</h1>
+  <div id="alerts"></div>
+  <form id="form">
+    <input type="text" id="input" placeholder="New item" autocomplete="off">
+    <label class="field">Category
+      <select id="category">
+        <option>Work</option>
+        <option>Personal</option>
+        <option>Others</option>
+      </select>
+    </label>
+    <label class="field">Priority
+      <select id="priority">
+        <option>High</option>
+        <option selected>Medium</option>
+        <option>Low</option>
+      </select>
+    </label>
+    <label class="field">Due date
+      <input type="date" id="due">
+    </label>
+    <label class="field">Reminder
+      <input type="datetime-local" id="remind">
+    </label>
+    <button type="submit">Add</button>
+  </form>
+  <div id="list"></div>
+
+<script>
+  const CATEGORIES = ['Work', 'Personal', 'Others'];
+  const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
+
+  let todos = [];
+  try { todos = JSON.parse(localStorage.getItem('todos')) || []; } catch (e) { todos = []; }
+  let nextId = todos.reduce((m, t) => Math.max(m, t.id), 0) + 1;
+  let editingId = null;
+  let alerts = []; // reminders that have fired and not yet been dismissed
+
+  const list = document.getElementById('list');
+  const input = document.getElementById('input');
+  const category = document.getElementById('category');
+  const priority = document.getElementById('priority');
+  const due = document.getElementById('due');
+  const remind = document.getElementById('remind');
+
+  // ----- Theme: one icon button toggles light / dark (starts from the system setting) -----
+  const themeBtn = document.getElementById('theme');
+  let theme = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  try {
+    const s = localStorage.getItem('theme');
+    if (s === 'light' || s === 'dark') theme = s;
+  } catch (e) {}
+
+  function applyTheme() {
+    document.documentElement.setAttribute('data-theme', theme);
+    // Show the icon for the mode you would switch to
+    const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    themeBtn.textContent = theme === 'dark' ? '☀️' : '\u{1F319}';
+    themeBtn.title = label;
+    themeBtn.setAttribute('aria-label', label);
+  }
+  themeBtn.onclick = () => {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    applyTheme();
+    try { localStorage.setItem('theme', theme); } catch (e) {}
+  };
+  applyTheme();
+
+  function save() {
+    try { localStorage.setItem('todos', JSON.stringify(todos)); } catch (e) {}
+  }
+
+  function today() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function el(tag, props) { return Object.assign(document.createElement(tag), props); }
+
+  function iconButton(symbol, label, onclick) {
+    const b = el('button', { className: 'icon', textContent: symbol, title: label, onclick });
+    b.setAttribute('aria-label', label);
+    return b;
+  }
+
+  function optionsSelect(values, selected, title) {
+    const s = el('select', { title });
+    values.forEach(v => s.appendChild(el('option', { textContent: v, selected: v === selected })));
+    return s;
+  }
+
+  function buildItem(t) {
+    const li = el('li', { className: t.done ? 'done' : '' });
+    const cb = el('input', { type: 'checkbox', checked: t.done, onchange: () => toggleTodo(t.id) });
+    const del = iconButton('\u{1F5D1}️', 'Delete', () => deleteTodo(t.id));
+
+    if (t.id === editingId) {
+      const text = el('input', { type: 'text', className: 'edit-text', value: t.text });
+      const cat = optionsSelect(CATEGORIES, t.category, 'Category');
+      const pri = optionsSelect(Object.keys(PRIORITY_ORDER), t.priority, 'Priority');
+      const date = el('input', { type: 'date', value: t.due, title: 'Due date' });
+      const rem = el('input', { type: 'datetime-local', value: t.remind, title: 'Reminder' });
+      const doSave = () => saveEdit(t.id, text.value, cat.value, pri.value, date.value, rem.value);
+      [text, cat, pri, date, rem].forEach(i => i.onkeydown = e => {
+        if (e.key === 'Enter') doSave();
+        if (e.key === 'Escape') { editingId = null; render(); }
+      });
+      li.append(cb, text, cat, pri, date, rem, el('button', { textContent: 'Save', onclick: doSave }), del);
+      setTimeout(() => text.focus());
+    } else {
+      li.append(cb, el('span', { className: 'text', textContent: t.text }));
+      li.append(el('span', { className: 'badge ' + t.priority, textContent: t.priority }));
+      if (t.due) {
+        const overdue = !t.done && t.due < today();
+        li.append(el('span', { className: 'meta' + (overdue ? ' overdue' : ''), textContent: (overdue ? 'Overdue: ' : 'Due: ') + t.due }));
+      }
+      if (t.remind) {
+        li.append(el('span', { className: 'meta', textContent: '\u{1F514} ' + t.remind.replace('T', ' ') }));
+      }
+      li.append(iconButton('✏️', 'Edit', () => { editingId = t.id; render(); }), del);
+    }
+    return li;
+  }
+
+  function renderAlerts() {
+    const box = document.getElementById('alerts');
+    box.innerHTML = '';
+    alerts.forEach(a => {
+      const row = el('div', { className: 'alert' });
+      row.append(
+        el('span', { textContent: '\u{1F514} Reminder: ' + a.text }),
+        el('button', { textContent: 'Dismiss', onclick: () => { alerts = alerts.filter(x => x !== a); renderAlerts(); } })
+      );
+      box.appendChild(row);
+    });
+  }
+
+  // Browser notification (only if the user allowed it); the banner is always shown too
+  function notify(text) {
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('To-Do reminder', { body: text });
+      }
+    } catch (e) {}
+  }
+
+  function askNotificationPermission() {
+    try {
+      if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    } catch (e) {}
+  }
+
+  // Fire any reminders whose time has arrived (and that are not done / not yet fired)
+  function checkReminders() {
+    const now = new Date();
+    let fired = false;
+    todos.forEach(t => {
+      if (t.remind && !t.reminded && !t.done && new Date(t.remind) <= now) {
+        t.reminded = true;
+        alerts.push({ text: t.text });
+        notify(t.text);
+        fired = true;
+      }
+    });
+    if (fired) { save(); renderAlerts(); }
+  }
+
+  function byDue(a, b) {
+    const x = a.due || '9999', y = b.due || '9999';
+    return x < y ? -1 : x > y ? 1 : a.id - b.id;
+  }
+
+  function render() {
+    save();
+    // One section per category (fixed order); within a section: priority, then due date
+    list.innerHTML = '';
+    CATEGORIES.forEach(name => {
+      const items = todos.filter(t => t.category === name);
+      if (!items.length) return;
+      list.appendChild(el('h2', { textContent: name }));
+      const ul = el('ul');
+      items
+        .sort((a, b) => (PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]) || byDue(a, b))
+        .forEach(t => ul.appendChild(buildItem(t)));
+      list.appendChild(ul);
+    });
+  }
+
+  function addTodo() {
+    const text = input.value.trim();
+    if (!text) return;
+    todos.push({
+      id: nextId++, text, category: category.value, priority: priority.value,
+      due: due.value, remind: remind.value, reminded: false, done: false
+    });
+    if (remind.value) askNotificationPermission();
+    input.value = '';
+    due.value = '';
+    remind.value = '';
+    render();
+    checkReminders();
+  }
+
+  function saveEdit(id, text, cat, pri, date, rem) {
+    const t = todos.find(t => t.id === id);
+    if (t && text.trim()) {
+      t.text = text.trim();
+      t.category = cat;
+      t.priority = pri;
+      t.due = date;
+      if (rem !== t.remind) t.reminded = false; // new reminder time: allow it to fire again
+      t.remind = rem;
+      if (rem) askNotificationPermission();
+    }
+    editingId = null;
+    render();
+    checkReminders();
+  }
+
+  function toggleTodo(id) {
+    const t = todos.find(t => t.id === id);
+    if (t) t.done = !t.done;
+    render();
+  }
+
+  function deleteTodo(id) {
+    todos = todos.filter(t => t.id !== id);
+    render();
+  }
+
+  // Older saved items may lack the new fields or use a category that no longer exists
+  todos.forEach(t => {
+    if (!PRIORITY_ORDER.hasOwnProperty(t.priority)) t.priority = 'Medium';
+    if (!CATEGORIES.includes(t.category)) t.category = 'Others';
+    t.remind = t.remind || '';
+    t.due = t.due || '';
+  });
+
+  document.getElementById('form').onsubmit = e => { e.preventDefault(); addTodo(); };
+  render();
+  checkReminders();
+  setInterval(checkReminders, 15000);
+</script>
+</body>
+</html>
